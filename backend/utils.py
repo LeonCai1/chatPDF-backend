@@ -19,6 +19,7 @@ from langchain.text_splitter import (
 from langchain.prompts.prompt import PromptTemplate
 from .config import OPEN_AI_KEY
 from .sources import qdrant_client
+import ocrmypdf
 
 
 def load_files(files) -> List[Document]:
@@ -26,7 +27,12 @@ def load_files(files) -> List[Document]:
     for file in files:
         filetype = file.content_type
         if filetype == "application/pdf":
-            pages += load_pdf(file)
+            pdf = fitz.open(stream=file.read(), filetype="pdf")
+            if not check_pdf(pdf):
+                re_orced_pdf = OCR(file)
+                re_orced_pdf.seek(0)
+                pdf = fitz.open(stream=re_orced_pdf.read(), filetype="pdf")
+            pages += load_pdf(pdf, file.name)
         elif (
             filetype
             == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -40,30 +46,29 @@ def load_files(files) -> List[Document]:
     return pages
 
 
-def load_pdf(file):
+def load_pdf(file, name):
     pdf = parse_pdf(file)
-    loader = text_to_docs(pdf, file.name, 1000)
+    loader = text_to_docs(pdf, name, 600)
     return loader
 
 
 def load_docx(file):
     extracted_text = docx2txt.process(file)
     txt = parse_txt(extracted_text)
-    loader = text_to_docs(txt, file.name, 1000)
+    loader = text_to_docs(txt, file.name, 600)
     return loader
 
 
 def load_txt(file):
     txt = parse_txt(file)
-    loader = text_to_docs(txt, file.name, 1000)
+    loader = text_to_docs(txt, file.name, 600)
     return loader
 
 
-def parse_pdf(file: BytesIO) -> List[str]:
+def parse_pdf(file) -> List[str]:
     logging.info(type(file))
-    pdf = fitz.open(stream=file.read(), filetype="pdf")
     output = []
-    for page in pdf:
+    for page in file:
         text = page.get_text()
         # Merge hyphenated words
         text = re.sub(r"(\w+)-\n(\w+)", r"\1\2", text)
@@ -201,3 +206,43 @@ def format_source(source_documents: List[Document]):
 def format_answer(res):
     ans = {"answer": res["answer"], "source": format_source(res["source_documents"])}
     return ans
+
+
+def check_pdf(pdf):
+    # try:
+    #     pdf = fitz.open(stream=file.read(), filetype="pdf")
+    # except Exception as e:
+    #     return False
+
+    ## check first 3 pages for text
+    test_pages = 3 if len(pdf) > 3 else len(pdf)
+    s = set()
+    for i in range(test_pages):
+        cleaned_text = re.sub(r"[\ufffd\n ]", "", pdf[i].get_text())
+        s.add(cleaned_text)
+    return len(s) > 1
+
+
+def OCR(file):
+    """_summary_
+
+    Args:
+        file (_ByteIO_): _input pdf_
+
+    Returns:
+        _ByteIO_: _re_ocred output pdf_
+    """
+    # print(file.content_type)
+    # if file.content_type != "application/pdf":
+    #     raise Exception("Only pdf files are supported")
+    output = BytesIO()
+    file.seek(0)
+    ocrmypdf.ocr(
+        input_file=BytesIO(file.read()),
+        output_file=output,
+        language=["eng", "chi_sim", "chi_tra"],
+        redo_ocr=True,
+    )
+    if not output:
+        raise Exception("OCR failed")
+    return output
