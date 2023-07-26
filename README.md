@@ -12,3 +12,7 @@ Usage:
     Endpoints are under backend/url.py file
     All the endpoints logics are under backend/views folder
     
+Run Server:
+```sh
+python manage.py runserver 
+```
