@@ -212,8 +212,6 @@ def single_source_qa(question: str, source: str):
         model="gpt-4",
         temperature=0,
     )
-
-    print(response)
     return response["choices"][0]["message"]["content"]
 
 
