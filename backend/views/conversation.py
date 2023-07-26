@@ -3,11 +3,12 @@ from rest_framework.response import Response
 from rest_framework import status
 from ..serializers import ConversationSerializer
 from ..models.models import Conversation
-from ..utils import load_chain, format_answer
+from ..utils import load_chain, format_answer, single_source_qa
 from ..sources import qa
 from ..service.conversation import (
     create_conversation as createConversation,
     update_conversation_history,
+    find_answer,
 )
 from ..service.collection import create_collection, delete_collection
 import uuid
@@ -60,16 +61,20 @@ def get_answer(request, conversation_name: str):
     res = qa[conversation_name](
         {
             "question": request.data["question"],
-            # "vectordbkwargs": {"search_distance": 0.8},
+            "chat_history": [],
         }
     )
-    # TODO: save q & a to db
-    # try:
+
+    temp = find_answer(request.data["question"], res)
+    if len(temp) == 1:
+        # generate answer from the only source using llm and update the 'answer' and 'source' field of res
+        singe_res = single_source_qa(request.data["question"], temp[0].page_content)
+        res["answer"] = singe_res
+        res["source_documents"] = temp
+
+    # save q & a to db
     update_conversation_history(conversation_name, request.data["question"], res)
     return Response(format_answer(res), status=status.HTTP_200_OK)
-    # except:
-    #     print("Cannot save conversation history")
-    #     return Response(status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(["DELETE"])

@@ -8,7 +8,8 @@ from langchain.vectorstores import Qdrant
 import docx2txt
 import fitz
 from hashlib import md5
-from langchain.chains import ConversationalRetrievalChain
+from langchain.llms import OpenAI
+from langchain.chains import ConversationalRetrievalChain, RetrievalQA
 from langchain.memory import ConversationBufferMemory, ConversationBufferWindowMemory
 from langchain.chat_models import ChatOpenAI
 from langchain.embeddings.openai import OpenAIEmbeddings
@@ -16,10 +17,13 @@ from langchain.docstore.document import Document
 from langchain.text_splitter import (
     RecursiveCharacterTextSplitter,
 )
+import openai
 from langchain.prompts.prompt import PromptTemplate
 from .config import OPEN_AI_KEY
 from .sources import qdrant_client
 import ocrmypdf
+
+EMBEDDING_RATE_LIMIT = 10**5
 
 
 def load_files(files) -> List[Document]:
@@ -29,9 +33,15 @@ def load_files(files) -> List[Document]:
         if filetype == "application/pdf":
             pdf = fitz.open(stream=file.read(), filetype="pdf")
             if not check_pdf(pdf):
-                re_orced_pdf = OCR(file)
-                re_orced_pdf.seek(0)
-                pdf = fitz.open(stream=re_orced_pdf.read(), filetype="pdf")
+                try:
+                    re_orced_pdf = OCR(file)
+                    re_orced_pdf.seek(0)
+                    pdf = fitz.open(stream=re_orced_pdf.read(), filetype="pdf")
+                except Exception as e:
+                    # TODO: handle ocr error for large pdf files.
+                    print(f"{file.name} OCR failed")
+                    print(e)
+                    continue
             pages += load_pdf(pdf, file.name)
         elif (
             filetype
@@ -60,13 +70,12 @@ def load_docx(file):
 
 
 def load_txt(file):
-    txt = parse_txt(file)
+    txt = parse_txt(str(file.read()))
     loader = text_to_docs(txt, file.name, 600)
     return loader
 
 
 def parse_pdf(file) -> List[str]:
-    logging.info(type(file))
     output = []
     for page in file:
         text = page.get_text()
@@ -76,6 +85,12 @@ def parse_pdf(file) -> List[str]:
         text = re.sub(r"(?<!\n\s)\n(?!\s\n)", " ", text.strip())
         # Remove multiple newlines
         text = re.sub(r"\n\s*\n", "\n\n", text)
+        import regex as re
+
+        # remove space between chinese characters while keeping space between english words
+        rex = r"(?<![a-zA-Z]{2})(?<=[a-zA-Z]{1})[ ]+(?=[a-zA-Z] |.$)|(?<=\p{Han}) +"
+
+        text = re.sub(rex, "", text, 0, re.MULTILINE | re.UNICODE)
         output.append(text)
     return output
 
@@ -95,7 +110,15 @@ def text_to_docs(text: str, file_name: str, chunk_size: int) -> List[Document]:
     with metadata."""
     if isinstance(text, str):
         # Take a single string as one page
-        text = [text]
+
+        text = (
+            [text]
+            if len(text) <= EMBEDDING_RATE_LIMIT
+            else [
+                text[i : i + EMBEDDING_RATE_LIMIT]
+                for i in range(0, len(text), EMBEDDING_RATE_LIMIT)
+            ]
+        )
     page_docs = [Document(page_content=page) for page in text]
 
     # Add page numbers as metadata
@@ -160,27 +183,38 @@ def load_chain(collection_name: str):
     qdrant = Qdrant(
         client=qdrant_client, collection_name=collection_name, embeddings=embedding
     )
-    # construct a qa chain with customized llm and db
-    memory = ConversationBufferMemory(
-        memory_key="chat_history",
-        return_messages=True,
-        output_key="answer",
-    )
 
+    # ConversationalRetrievalChain
     qa = ConversationalRetrievalChain.from_llm(
         ChatOpenAI(
             model_name="gpt-3.5-turbo-16k", openai_api_key=OPEN_AI_KEY, temperature=0
         ),
-        qdrant.as_retriever(search_type="mmr", search_kwargs={"k": 5}),
-        memory=memory,
+        retriever=qdrant.as_retriever(
+            search_type="mmr", search_kwargs={"k": 10, "search_distance": 0.8}
+        ),  # search_type="mmr", search_kwargs={"k": 20}),
+        # memory=memory,
         verbose=True,
         return_source_documents=True,
-        # combine_docs_chain_kwargs={
-        #     "prompt": PromptTemplate.from_template("output in Chinese")
-        # },
     )
 
     return qa
+
+
+def single_source_qa(question: str, source: str):
+    response = openai.ChatCompletion.create(
+        messages=[
+            {
+                "role": "system",
+                "content": f'Use the following pieces of context to answer the question at the end. If you do not know the answer, just say that you don not know, don not try to make up an answer."{source}" Answer in Chinese',
+            },
+            {"role": "user", "content": question},
+        ],
+        model="gpt-4",
+        temperature=0,
+    )
+
+    print(response)
+    return response["choices"][0]["message"]["content"]
 
 
 def format_source(source_documents: List[Document]):
@@ -192,28 +226,13 @@ def format_source(source_documents: List[Document]):
     return res
 
 
-# def format_answer(res):
-#     ans = (
-#         res["answer"]
-#         + "\n"
-#         + "----------------------------- SOURCRE -----------------------"
-#         + "\n"
-#         + format_source(res["source_documents"])
-#     )
-#     return ans
-
-
 def format_answer(res):
+    # sources for qa
     ans = {"answer": res["answer"], "source": format_source(res["source_documents"])}
     return ans
 
 
 def check_pdf(pdf):
-    # try:
-    #     pdf = fitz.open(stream=file.read(), filetype="pdf")
-    # except Exception as e:
-    #     return False
-
     ## check first 3 pages for text
     test_pages = 3 if len(pdf) > 3 else len(pdf)
     s = set()
@@ -240,7 +259,7 @@ def OCR(file):
     ocrmypdf.ocr(
         input_file=BytesIO(file.read()),
         output_file=output,
-        language=["eng", "chi_sim", "chi_tra"],
+        language=["eng", "chi_sim"],
         redo_ocr=True,
     )
     if not output:

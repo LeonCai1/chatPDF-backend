@@ -84,7 +84,9 @@ def upload_files(request, collection_name: str):
     add_filenames(collection_name, filenames)
 
     # add files to vector db
+
     pages = load_files(files)
+
     qdrant.add_documents(pages)
 
     try:
