@@ -1,7 +1,7 @@
-Architecture:
+### Architecture
+[![arch.jpg](https://i.postimg.cc/HLnXzDMR/arch.jpg)](https://postimg.cc/McknZLdm)
 
-
-👨‍🚀 Prerequisites
+### 👨‍🚀 Prerequisites
 ```sh
 pip install -r requirements.txt
 ```
