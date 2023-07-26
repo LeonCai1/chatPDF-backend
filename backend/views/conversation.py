@@ -51,7 +51,9 @@ def get_conversation(request, conversation_name: str):
     # try:
     conversation = Conversation.objects.get(conversation_name=conversation_name)
     # Load qa chain
-    qa[conversation_name] = load_chain(collection_name=conversation_name)
+    qa[conversation_name] = load_chain(
+        collection_name=conversation_name, model_name="gpt-3.5-turbo-16k"
+    )
     serializer = ConversationSerializer(conversation)
     return Response(serializer.data, status=status.HTTP_200_OK)
 

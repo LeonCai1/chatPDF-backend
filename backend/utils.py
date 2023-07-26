@@ -179,20 +179,18 @@ def upsert_documents_to_qdrant(
         print(e)
 
 
-def load_chain(collection_name: str):
+## TODO: model parameters to method parameters
+def load_chain(collection_name: str, model_name: str):
     qdrant = Qdrant(
         client=qdrant_client, collection_name=collection_name, embeddings=embedding
     )
 
     # ConversationalRetrievalChain
     qa = ConversationalRetrievalChain.from_llm(
-        ChatOpenAI(
-            model_name="gpt-3.5-turbo-16k", openai_api_key=OPEN_AI_KEY, temperature=0
-        ),
+        ChatOpenAI(model_name=model_name, openai_api_key=OPEN_AI_KEY, temperature=0),
         retriever=qdrant.as_retriever(
             search_type="mmr", search_kwargs={"k": 10, "search_distance": 0.8}
         ),  # search_type="mmr", search_kwargs={"k": 20}),
-        # memory=memory,
         verbose=True,
         return_source_documents=True,
     )
